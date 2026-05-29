@@ -17,10 +17,11 @@ s3_client = boto3.client('s3', region_name='us-east-1')
 BUCKET_NAME = "sicei-alumnos-fotos-mau"
 # Configuración de Amazon SNS para Notificaciones
 sns_client = boto3.client('sns', region_name='us-east-1')
-SNS_TOPIC_ARN = "PEGA_AQUÍ_TU_ARN_DE_SNS"  # <--- Reemplaza esto con tu ARN real
+SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:204211162715:notificaciones-sicei" 
 # =====================================================================
 # SÚPER CRÍTICO: Crear las tablas automáticamente en AWS RDS si  no existen
 # =====================================================================
+Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 
 
