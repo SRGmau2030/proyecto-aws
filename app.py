@@ -8,9 +8,13 @@ from database import engine, Base, get_db
 # Importamos los modelos de la base de datos y los esquemas de validación
 from models.alumno import AlumnoDB, AlumnoCreate, AlumnoResponse
 from models.profesor import ProfesorDB, ProfesorCreate, ProfesorResponse
+import boto3
+from fastapi import File, UploadFile  # Sirve para recibir archivos en los endpoints
 
 app = FastAPI(title="SICEI API - Segunda Entrega")
-
+# Configuración del cliente de AWS S3 para las fotos
+s3_client = boto3.client('s3', region_name='us-east-1')
+BUCKET_NAME = "sicei-alumnos-fotos-mau"
 # =====================================================================
 # SÚPER CRÍTICO: Crear las tablas automáticamente en AWS RDS si  no existen
 # =====================================================================
@@ -21,6 +25,28 @@ Base.metadata.create_all(bind=engine)
 def read_root():
     return {"mensaje": "SICEI API con Base de Datos Relacional en RDS activa"}
 
+# POST /alumnos/subir-foto -> Sube una imagen a S3 y devuelve su URL pública
+@app.post("/alumnos/subir-foto")
+def subir_foto_alumno(file: UploadFile = File(...)):
+    try:
+        # 1. Definir el nombre con el que se guardará el archivo en S3
+        nombre_archivo = f"fotos/{file.filename}"
+        
+        # 2. Subir el archivo directamente al bucket de AWS S3 con permisos de lectura pública
+        s3_client.upload_fileobj(
+            file.file,
+            BUCKET_NAME,
+            nombre_archivo,
+            ExtraArgs={"ACL": "public-read", "ContentType": file.content_type}
+        )
+        
+        # 3. Construir la URL pública de la imagen en internet
+        url_publica = f"https://{BUCKET_NAME}.s3.amazonaws.com/{nombre_archivo}"
+        
+        return {"url_foto": url_publica}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al subir archivo a S3: {str(e)}")
 
 # ==========================================
 # ENDPOINTS PARA ALUMNOS [cite: 76]
