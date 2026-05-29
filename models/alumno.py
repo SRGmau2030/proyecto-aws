@@ -1,25 +1,26 @@
 from sqlalchemy import Column, Integer, String, Float
 from database import Base
 from pydantic import BaseModel, Field
+from typing import Optional
 
-# Modelo del ORM (Para crear la tabla en la base de datos de AWS)
+# Modelo ORM (Estructura de la tabla en AWS Aurora)
 class AlumnoDB(Base):
     __tablename__ = "alumnos"
 
-    id = Column(Integer, primary_key=True, index=True) # Autogenerado por la DB
-    nombres = Column(String, nullable=False)
-    apellidos = Column(String, nullable=False)
-    matricula = Column(String, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    nombres = Column(String(50), nullable=False)
+    apellidos = Column(String(50), nullable=False)
+    matricula = Column(String(10), nullable=False)
     promedio = Column(Float, nullable=False)
-    foto = Column(String(255), nullable=True)
+    foto = Column(String(255), nullable=True)  # Permite almacenar NULL de forma nativa
 
-# Esquema Pydantic (Para validar los datos que entran en las peticiones de la API)
+# Esquemas de Validación Pydantic
 class AlumnoBase(BaseModel):
     nombres: str = Field(..., min_length=1)
     apellidos: str = Field(..., min_length=1)
     matricula: str = Field(..., min_length=1)
     promedio: float = Field(..., ge=0.0, le=100.0)
-    foto: str = Field(None)
+    foto: Optional[str] = None  # Alivio crítico: Acepta strings o valores nulos (None)
 
 class AlumnoCreate(AlumnoBase):
     pass
