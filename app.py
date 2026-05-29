@@ -25,7 +25,7 @@ BUCKET_NAME = "sicei-alumnos-fotos-mau"
 
 sns_client = boto3.client('sns', region_name='us-east-1')
 # ARN real de tu consola de AWS SNS para las notificaciones
-SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:204211162715:notificaciones-sicei"
+SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:204211162715:notificaciones-sicei "
 
 
 @app.get("/")
