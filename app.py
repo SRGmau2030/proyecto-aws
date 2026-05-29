@@ -15,6 +15,9 @@ app = FastAPI(title="SICEI API - Segunda Entrega")
 # Configuración del cliente de AWS S3 para las fotos
 s3_client = boto3.client('s3', region_name='us-east-1')
 BUCKET_NAME = "sicei-alumnos-fotos-mau"
+# Configuración de Amazon SNS para Notificaciones
+sns_client = boto3.client('sns', region_name='us-east-1')
+SNS_TOPIC_ARN = "PEGA_AQUÍ_TU_ARN_DE_SNS"  # <--- Reemplaza esto con tu ARN real
 # =====================================================================
 # SÚPER CRÍTICO: Crear las tablas automáticamente en AWS RDS si  no existen
 # =====================================================================
@@ -66,19 +69,40 @@ def obtener_alumno_por_id(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Alumno no encontrado")
     return alumno
 
-# POST /alumnos -> Crear un nuevo registro en la DB
+# POST /alumnos -> Crear un nuevo registro en la DB y notificar por SNS
 @app.post("/alumnos", response_model=AlumnoResponse, status_code=status.HTTP_201_CREATED)
 def crear_alumno(alumno: AlumnoCreate, db: Session = Depends(get_db)):
+    # 1. Crear el objeto con todos sus campos (incluyendo la foto)
     nuevo_alumno = AlumnoDB(
         nombres=alumno.nombres,
         apellidos=alumno.apellidos,
         matricula=alumno.matricula,
         promedio=alumno.promedio,
-        foto=alumno.foto  
+        foto=alumno.foto
     )
     db.add(nuevo_alumno)
     db.commit()
     db.refresh(nuevo_alumno)
+    
+    # 2. DISPARAR NOTIFICACIÓN AUTOMÁTICA POR AMAZON SNS
+    try:
+        mensaje_alerta = (
+            f"¡Alerta SICEI! Se ha registrado un nuevo alumno con éxito.\n\n"
+            f"• Nombre: {nuevo_alumno.nombres} {nuevo_alumno.apellidos}\n"
+            f"• Matrícula: {nuevo_alumno.matricula}\n"
+            f"• Promedio: {nuevo_alumno.promedio}\n"
+            f"• Foto URL: {nuevo_alumno.foto}\n"
+        )
+        
+        sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=mensaje_alerta,
+            Subject="Nuevo Alumno Registrado - SICEI API"
+        )
+    except Exception as e:
+        # Si falla SNS por algo, imprimimos el error pero dejamos que la API responda 201
+        print(f"Error al enviar notificación SNS: {str(e)}")
+
     return nuevo_alumno
 
 # PUT /alumnos/{id} -> Modificar los datos de un alumno existente
