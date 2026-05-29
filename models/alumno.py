@@ -3,7 +3,7 @@ from database import Base
 from pydantic import BaseModel, Field
 from typing import Optional
 
-# Modelo ORM (Estructura de la tabla en AWS Aurora)
+# Modelo ORM para AWS Aurora
 class AlumnoDB(Base):
     __tablename__ = "alumnos"
 
@@ -12,21 +12,26 @@ class AlumnoDB(Base):
     apellidos = Column(String(50), nullable=False)
     matricula = Column(String(10), nullable=False)
     promedio = Column(Float, nullable=False)
-    foto = Column(String(255), nullable=True)  # Permite almacenar NULL de forma nativa
+    foto = Column(String(255), nullable=True)
 
-# Esquemas de Validación Pydantic
+# Esquemas Pydantic Flexibles contra errores 422
 class AlumnoBase(BaseModel):
-    nombres: str = Field(..., min_length=1)
-    apellidos: str = Field(..., min_length=1)
-    matricula: str = Field(..., min_length=1)
-    promedio: float = Field(..., ge=0.0, le=100.0)
-    foto: Optional[str] = None  # Alivio crítico: Acepta strings o valores nulos (None)
+    nombres: Optional[str] = None
+    apellidos: Optional[str] = None
+    matricula: Optional[str] = None
+    promedio: Optional[float] = None
+    foto: Optional[str] = None
 
 class AlumnoCreate(AlumnoBase):
     pass
 
-class AlumnoResponse(AlumnoBase):
+class AlumnoResponse(BaseModel):
     id: int
+    nombres: Optional[str] = ""
+    apellidos: Optional[str] = ""
+    matricula: Optional[str] = ""
+    promedio: Optional[float] = 0.0
+    foto: Optional[str] = None
 
     class Config:
         from_attributes = True

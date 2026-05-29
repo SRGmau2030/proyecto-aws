@@ -1,29 +1,34 @@
 from sqlalchemy import Column, Integer, String
 from database import Base
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+from typing import Optional
 
-# Modelo del ORM
+# Modelo ORM para AWS Aurora
 class ProfesorDB(Base):
     __tablename__ = "profesores"
 
-    id = Column(Integer, primary_key=True, index=True) # Autogenerado por la DB
-    numeroEmpleado = Column(String, nullable=False)
-    nombres = Column(String, nullable=False)
-    apellidos = Column(String, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    numeroEmpleado = Column(Integer, unique=True, nullable=False)
+    nombres = Column(String(50), nullable=False)
+    apellidos = Column(String(50), nullable=False)
     horasClase = Column(Integer, nullable=False)
 
-# Esquema Pydantic
+# Esquemas Pydantic Flexibles contra errores 422
 class ProfesorBase(BaseModel):
-    numeroEmpleado: str = Field(..., min_length=1)
-    nombres: str = Field(..., min_length=1)
-    apellidos: str = Field(..., min_length=1)
-    horasClase: int = Field(..., ge=0)
+    numeroEmpleado: Optional[int] = None
+    nombres: Optional[str] = None
+    apellidos: Optional[str] = None
+    horasClase: Optional[int] = None
 
 class ProfesorCreate(ProfesorBase):
     pass
 
-class ProfesorResponse(ProfesorBase):
+class ProfesorResponse(BaseModel):
     id: int
+    numeroEmpleado: Optional[int] = 0
+    nombres: Optional[str] = ""
+    apellidos: Optional[str] = ""
+    horasClase: Optional[int] = 0
 
     class Config:
         from_attributes = True
