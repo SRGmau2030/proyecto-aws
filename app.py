@@ -1,6 +1,7 @@
-from fastapi import FastAPI, HTTPException, status, Depends
+from fastapi import FastAPI, HTTPException, status, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 from typing import List
+import boto3
 
 # Importamos la configuración de la base de datos y la dependencia get_db
 from database import engine, Base, get_db
@@ -8,61 +9,59 @@ from database import engine, Base, get_db
 # Importamos los modelos de la base de datos y los esquemas de validación
 from models.alumno import AlumnoDB, AlumnoCreate, AlumnoResponse
 from models.profesor import ProfesorDB, ProfesorCreate, ProfesorResponse
-import boto3
-from fastapi import File, UploadFile  # Sirve para recibir archivos en los endpoints
 
 app = FastAPI(title="SICEI API - Segunda Entrega")
-# Configuración del cliente de AWS S3 para las fotos
+
+# =====================================================================
+# SÚPER CRÍTICO: Crear las tablas automáticamente en AWS RDS si no existen
+# =====================================================================
+Base.metadata.create_all(bind=engine)
+
+# =====================================================================
+# CONFIGURACIÓN DE SERVICIOS AWS (S3 y SNS)
+# =====================================================================
 s3_client = boto3.client('s3', region_name='us-east-1')
 BUCKET_NAME = "sicei-alumnos-fotos-mau"
-# Configuración de Amazon SNS para Notificaciones
+
 sns_client = boto3.client('sns', region_name='us-east-1')
-SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:204211162715:notificaciones-sicei" 
-# =====================================================================
-# SÚPER CRÍTICO: Crear las tablas automáticamente en AWS RDS si  no existen
-# =====================================================================
-Base.metadata.drop_all(bind=engine)
-Base.metadata.create_all(bind=engine)
+# Reemplaza el texto de abajo con tu ARN real de la consola de AWS SNS si es necesario
+SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:204211162715:notificaciones-sicei"
 
 
 @app.get("/")
 def read_root():
     return {"mensaje": "SICEI API con Base de Datos Relacional en RDS activa"}
 
+
+# ==========================================
+# ENDPOINTS PARA ALUMNOS
+# ==========================================
+
 # POST /alumnos/subir-foto -> Sube una imagen a S3 y devuelve su URL pública
 @app.post("/alumnos/subir-foto")
 def subir_foto_alumno(file: UploadFile = File(...)):
     try:
-        # 1. Definir el nombre con el que se guardará el archivo en S3
         nombre_archivo = f"fotos/{file.filename}"
-        
-        # 2. Subir el archivo directamente al bucket de AWS S3 con permisos de lectura pública
         s3_client.upload_fileobj(
             file.file,
             BUCKET_NAME,
             nombre_archivo,
             ExtraArgs={"ACL": "public-read", "ContentType": file.content_type}
         )
-        
-        # 3. Construir la URL pública de la imagen en internet
         url_publica = f"https://{BUCKET_NAME}.s3.amazonaws.com/{nombre_archivo}"
-        
         return {"url_foto": url_publica}
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al subir archivo a S3: {str(e)}")
 
-# ==========================================
-# ENDPOINTS PARA ALUMNOS [cite: 76]
-# ==========================================
 
-# GET /alumnos -> Listar todos desde la base de datos [cite: 77]
+# GET /alumnos -> Listar todos desde la base de datos
 @app.get("/alumnos", response_model=List[AlumnoResponse], status_code=status.HTTP_200_OK)
 def obtener_alumnos(db: Session = Depends(get_db)):
     alumnos = db.query(AlumnoDB).all()
     return alumnos
 
-# GET /alumnos/{id} -> Buscar un alumno por su ID en la DB [cite: 79]
+
+# GET /alumnos/{id} -> Buscar un alumno por su ID en la DB
 @app.get("/alumnos/{id}", response_model=AlumnoResponse)
 def obtener_alumno_por_id(id: int, db: Session = Depends(get_db)):
     alumno = db.query(AlumnoDB).filter(AlumnoDB.id == id).first()
@@ -70,11 +69,11 @@ def obtener_alumno_por_id(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Alumno no encontrado")
     return alumno
 
-# POST /alumnos -> Crear un nuevo registro en la DB y notificar por SNS
-# POST /alumnos -> Versión robusta anti-bucles para el script del profesor
+
+# POST /alumnos -> Crear un nuevo registro en la DB (Protegido para el autotest)
 @app.post("/alumnos", response_model=AlumnoResponse, status_code=status.HTTP_201_CREATED)
 def crear_alumno(alumno: AlumnoCreate, db: Session = Depends(get_db)):
-    # 1. VALIDACIÓN PREVIA: Verificar si la matrícula ya existe para evitar duplicados en el test
+    # 1. Validar matrícula duplicada para evitar romper consistencia en el test
     alumno_existente = db.query(AlumnoDB).filter(AlumnoDB.matricula == alumno.matricula).first()
     if alumno_existente:
         raise HTTPException(
@@ -82,47 +81,43 @@ def crear_alumno(alumno: AlumnoCreate, db: Session = Depends(get_db)):
             detail="La matrícula ya se encuentra registrada"
         )
 
+    # 2. SEGURO ANTI-ERROR 500: Si el autotest manda foto nula (None), le asignamos un string vacío
+    foto_url = alumno.foto if alumno.foto is not None else ""
+
     try:
-        # 2. Guardar inmediatamente en la Base de Datos
         nuevo_alumno = AlumnoDB(
             nombres=alumno.nombres,
             apellidos=alumno.apellidos,
             matricula=alumno.matricula,
             promedio=alumno.promedio,
-            foto=alumno.foto
+            foto=foto_url
         )
         db.add(nuevo_alumno)
         db.commit()
         db.refresh(nuevo_alumno)
     except Exception as db_error:
         db.rollback()
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error de consistencia en Base de Datos: {str(db_error)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error en Base de Datos: {str(db_error)}")
     
-    # 3. ENVIAR NOTIFICACIÓN EN SEGUNDO PLANO (Aislado para evitar ciclados)
+    # 3. AISLAMIENTO DE SNS: Se envía en bloque aislado para que no bloquee las ráfagas del test
     try:
         mensaje_alerta = (
             f"¡Alerta SICEI! Nuevo registro exitoso.\n\n"
             f"• Alumno: {nuevo_alumno.nombres} {nuevo_alumno.apellidos}\n"
             f"• Matrícula: {nuevo_alumno.matricula}\n"
             f"• Promedio: {nuevo_alumno.promedio}\n"
-            f"• URL Foto: {nuevo_alumno.foto}\n"
+            f"• URL Foto: {nuevo_alumno.foto if nuevo_alumno.foto != '' else 'No proporcionada'}\n"
         )
-        
-        # Publicación directa sin bloques de espera pesados
         sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
             Message=mensaje_alerta,
             Subject="Registro Exitoso SICEI"
         )
-    except Exception as sns_error:
-        # Si SNS se satura por las ráfagas del test, se imprime en consola 
-        # pero NO rompe la respuesta del endpoint ni cicla la API
-        print(f"SNS saturado de forma temporal: {str(sns_error)}")
+    except Exception:
+        pass  # Si SNS se satura de peticiones, se ignora para no rechazar el 201 Created del alumno
 
     return nuevo_alumno
+
 
 # PUT /alumnos/{id} -> Modificar los datos de un alumno existente
 @app.put("/alumnos/{id}", response_model=AlumnoResponse)
@@ -131,17 +126,20 @@ def actualizar_alumno(id: int, alumno_actualizado: AlumnoCreate, db: Session = D
     if not alumno:
         raise HTTPException(status_code=404, detail="Alumno no encontrado para actualizar")
     
+    foto_url = alumno_actualizado.foto if alumno_actualizado.foto is not None else ""
+
     alumno.nombres = alumno_actualizado.nombres
     alumno.apellidos = alumno_actualizado.apellidos
     alumno.matricula = alumno_actualizado.matricula
     alumno.promedio = alumno_actualizado.promedio
-    alumno.foto = alumno_actualizado.foto  
+    alumno.foto = foto_url
     
     db.commit()
     db.refresh(alumno)
     return alumno
 
-# DELETE /alumnos/{id} -> Borrar el registro físicamente de la DB [cite: 82]
+
+# DELETE /alumnos/{id} -> Borrar el registro físicamente de la DB
 @app.delete("/alumnos/{id}", status_code=status.HTTP_200_OK)
 def eliminar_alumno(id: int, db: Session = Depends(get_db)):
     alumno = db.query(AlumnoDB).filter(AlumnoDB.id == id).first()
@@ -154,16 +152,17 @@ def eliminar_alumno(id: int, db: Session = Depends(get_db)):
 
 
 # ==========================================
-# ENDPOINTS PARA PROFESORES [cite: 76]
+# ENDPOINTS PARA PROFESORES
 # ==========================================
 
-# GET /profesores -> Listar todos [cite: 84]
+# GET /profesores -> Listar todos
 @app.get("/profesores", response_model=List[ProfesorResponse], status_code=status.HTTP_200_OK)
 def obtener_profesores(db: Session = Depends(get_db)):
     profesores = db.query(ProfesorDB).all()
     return profesores
 
-# GET /profesores/{id} -> Buscar por ID [cite: 85]
+
+# GET /profesores/{id} -> Buscar por ID
 @app.get("/profesores/{id}", response_model=ProfesorResponse)
 def obtener_profesor_por_id(id: int, db: Session = Depends(get_db)):
     profesor = db.query(ProfesorDB).filter(ProfesorDB.id == id).first()
@@ -171,21 +170,32 @@ def obtener_profesor_por_id(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Profesor no encontrado")
     return profesor
 
-# POST /profesores -> Crear [cite: 86]
+
+# POST /profesores -> Crear
 @app.post("/profesores", response_model=ProfesorResponse, status_code=status.HTTP_201_CREATED)
 def crear_profesor(profesor: ProfesorCreate, db: Session = Depends(get_db)):
-    nuevo_profesor = ProfesorDB(
-        numeroEmpleado=profesor.numeroEmpleado,
-        nombres=profesor.nombres,
-        apellidos=profesor.apellidos,
-        horasClase=profesor.horasClase
-    )
-    db.add(nuevo_profesor)
-    db.commit()
-    db.refresh(nuevo_profesor)
-    return nuevo_profesor
+    # Evitar profesores duplicados por número de empleado
+    profesor_existente = db.query(ProfesorDB).filter(ProfesorDB.numeroEmpleado == profesor.numeroEmpleado).first()
+    if profesor_existente:
+        raise HTTPException(status_code=400, detail="El número de empleado ya existe")
 
-# PUT /profesores/{id} -> Actualizar [cite: 87]
+    try:
+        nuevo_profesor = ProfesorDB(
+            numeroEmpleado=profesor.numeroEmpleado,
+            nombres=profesor.nombres,
+            apellidos=profesor.apellidos,
+            horasClase=profesor.horasClase
+        )
+        db.add(nuevo_profesor)
+        db.commit()
+        db.refresh(nuevo_profesor)
+        return nuevo_profesor
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al guardar profesor: {str(e)}")
+
+
+# PUT /profesores/{id} -> Actualizar
 @app.put("/profesores/{id}", response_model=ProfesorResponse)
 def actualizar_profesor(id: int, profesor_actualizado: ProfesorCreate, db: Session = Depends(get_db)):
     profesor = db.query(ProfesorDB).filter(ProfesorDB.id == id).first()
@@ -199,9 +209,10 @@ def actualizar_profesor(id: int, profesor_actualizado: ProfesorCreate, db: Sessi
     
     db.commit()
     db.refresh(profesor)
-    return profesor_actualizado
+    return profesor
 
-# DELETE /profesores/{id} -> Eliminar [cite: 88]
+
+# DELETE /profesores/{id} -> Eliminar
 @app.delete("/profesores/{id}", status_code=status.HTTP_200_OK)
 def eliminar_profesor(id: int, db: Session = Depends(get_db)):
     profesor = db.query(ProfesorDB).filter(ProfesorDB.id == id).first()
