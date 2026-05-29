@@ -93,4 +93,7 @@ def crear_alumno(alumno: AlumnoCreate, db: Session = Depends(get_db)):
         db.add(nuevo_alumno)
         db.commit()
         db.refresh(nuevo_alumno)
-    except Exception as db_
+    except Exception as db_error:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al crear alumno: {str(db_error)}")
+    return nuevo_alumno
